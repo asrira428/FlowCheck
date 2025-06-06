@@ -11,6 +11,7 @@ const Index = () => {
   const navigate = useNavigate();
 
   const handleFileSelect = (file: File) => {
+    console.log("Received in Index:", file);
     setSelectedFile(file);
   };
 
@@ -22,21 +23,51 @@ const Index = () => {
     }
   };
 
+  // const handleStartAnalysis = async () => {
+  //   if (!selectedFile || !loanAmount) return;
+    
+  //   // TODO: Integrate with Python backend running LlamaParse
+  //   // const formData = new FormData();
+  //   // formData.append('pdf', selectedFile);
+  //   // formData.append('loanAmount', loanAmount);
+  //   // const response = await fetch('/api/analyze', {
+  //   //   method: 'POST',
+  //   //   body: formData
+  //   // });
+    
+  //   console.log('Starting analysis for:', selectedFile.name, 'Loan amount:', loanAmount);
+  //   navigate('/processing', { state: { filename: selectedFile.name, loanAmount } });
+  // };
   const handleStartAnalysis = async () => {
-    if (!selectedFile || !loanAmount) return;
-    
-    // TODO: Integrate with Python backend running LlamaParse
-    // const formData = new FormData();
-    // formData.append('pdf', selectedFile);
-    // formData.append('loanAmount', loanAmount);
-    // const response = await fetch('/api/analyze', {
-    //   method: 'POST',
-    //   body: formData
-    // });
-    
-    console.log('Starting analysis for:', selectedFile.name, 'Loan amount:', loanAmount);
-    navigate('/processing', { state: { filename: selectedFile.name, loanAmount } });
+    if (!selectedFile || !loanAmount) {
+      console.warn("Missing file or loan amount");
+      return;
+    }
+  
+    const formData = new FormData();
+    formData.append("file", selectedFile); // Must match FastAPI param
+    formData.append("loan_amount", loanAmount.toString());
+  
+    try {
+      const response = await fetch("http://localhost:5050/analyze", {
+        method: "POST",
+        body: formData,
+      });
+  
+      if (!response.ok) {
+        console.error("Server returned an error:", response.statusText);
+        return;
+      }
+  
+      const result = await response.json();
+      console.log("Parsed result from backend:", result);
+  
+      navigate('/processing', { state: result });
+    } catch (error) {
+      console.error("Failed to analyze file:", error);
+    }
   };
+  
 
   const isFormValid = selectedFile && loanAmount && parseFloat(loanAmount) > 0;
 

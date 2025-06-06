@@ -12,8 +12,17 @@ interface ProcessingStep {
 const ProcessingPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const filename = location.state?.filename || 'document.pdf';
-  const [currentStep, setCurrentStep] = useState(0);
+  const {
+    filename = 'document.pdf',
+    loanAmount = 0,
+    parsedData = null,
+  } = (location.state as { filename?: string; loanAmount?: number; parsedData?: any }) || {};
+
+  const [currentStep, setCurrentStep] = useState<number>(0);
+
+  const [sessionId, setSessionId] = useState<string>('');
+  const [analyzeResult, setAnalyzeResult] = useState<any>(null);
+
 
   const steps: ProcessingStep[] = [
     {
@@ -56,26 +65,91 @@ const ProcessingPage = () => {
   const [processedSteps, setProcessedSteps] = useState<ProcessingStep[]>(steps);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentStep((prev) => {
-        const nextStep = prev + 1;
-        if (nextStep <= steps.length) {
-          setProcessedSteps((prevSteps) => 
-            prevSteps.map((step, index) => ({
-              ...step,
-              status: index < nextStep - 1 ? 'completed' : 
-                     index === nextStep - 1 ? 'processing' : 'pending'
-            }))
-          );
-          return nextStep;
-        }
-        clearInterval(interval);
-        return prev;
-      });
-    }, 2000);
+    // If parsedData is missing, we cannot proceed
+    if (!parsedData) {
+      console.error('ProcessingPage: no parsedData in location.state!');
+      return;
+    }
 
-    return () => clearInterval(interval);
-  }, []);
+    let isMounted = true;
+    let pollInterval: number;
+
+    const startAnalysis = async () => {
+      try {
+        // ─────────────────────────────────────────────────
+        // 1) POST JSON to /analyze (instead of FormData)
+        const payload = {
+          parsed_data: parsedData,
+          loan_amount: loanAmount,
+        };
+        const res = await fetch('http://localhost:8000/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          console.error('POST /analyze returned status', res.status);
+          return;
+        }
+
+        const resultJson = await res.json();
+        if (!isMounted) return;
+
+        setSessionId(resultJson.session_id);
+        setAnalyzeResult(resultJson);
+
+        // ─────────────────────────────────────────────────
+        // 2) Poll /progress/{session_id} every second
+        pollInterval = window.setInterval(async () => {
+          try {
+            const progressRes = await fetch(
+              `http://localhost:8000/progress/${resultJson.session_id}`
+            );
+            const progressJson = await progressRes.json();
+            const step = progressJson.current_step as number;
+
+            if (!isMounted) return;
+
+            setCurrentStep(step);
+
+            // Update timeline statuses
+            setProcessedSteps(prev =>
+              prev.map((stepObj, idx) => ({
+                ...stepObj,
+                status:
+                  idx < step
+                    ? 'completed'
+                    : idx === step
+                    ? 'processing'
+                    : 'pending',
+              }))
+            );
+
+            // Once we reach the final step, stop polling and navigate to /results
+            if (step >= steps.length) {
+              clearInterval(pollInterval);
+              navigate('/results', {
+                state: resultJson,
+              });
+            }
+          } catch (pollError) {
+            console.error('Error polling /progress:', pollError);
+          }
+        }, 1000);
+      } catch (err) {
+        console.error('Error in startAnalysis():', err);
+      }
+    };
+
+    startAnalysis();
+
+    return () => {
+      isMounted = false;
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [parsedData, loanAmount, navigate]);
+
 
   const isComplete = currentStep >= steps.length;
 
@@ -182,7 +256,11 @@ const ProcessingPage = () => {
           {/* View Report Button */}
           <div className="mt-8 text-center">
             <Button
-              onClick={() => navigate('/results')}
+              onClick={() =>
+                navigate('/results', {
+                  state: analyzeResult,
+                })
+              }
               disabled={!isComplete}
               className={`px-8 py-3 text-lg font-medium transition-all duration-700 transform ${
                 isComplete 
