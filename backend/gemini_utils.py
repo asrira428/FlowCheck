@@ -5,7 +5,8 @@ from typing import List, Dict, Optional, Any
 import re
 
 # genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel(model_name='models/gemini-1.5-flash')
+# model = genai.GenerativeModel(model_name='models/gemini-1.5-flash')
+model = genai.GenerativeModel(model_name='models/gemini-2.0-flash')
 
 def extract_transactions(raw_text: str) -> List[Dict[str, Optional[float]]]:
     """
@@ -17,9 +18,11 @@ def extract_transactions(raw_text: str) -> List[Dict[str, Optional[float]]]:
       • "amount" (float)
       • "direction" ("debit" or "credit")
       • "balance" (float or None)
+      • "month" (int 1–12)
 
     We ask Gemini to output one transaction per line, in the format:
-      DESCRIPTION || CURRENCY || AMOUNT || DIRECTION || BALANCE
+      DESCRIPTION || CURRENCY || AMOUNT || DIRECTION || BALANCE || MONTH
+
     Then we parse those lines.
     """
     prompt = f"""
@@ -27,7 +30,7 @@ You are a bank‐statement extraction expert. Below is the full text of a multi�
 (which may be from an Indian IDFC, a UK Lloyds, a US Bank, or an Australian Commonwealth Bank).
 Extract each transaction row and output exactly one line per transaction in this format:
 
-<DESCRIPTION> || <CURRENCY> || <AMOUNT> || <DIRECTION> || <BALANCE>
+<DESCRIPTION> || <CURRENCY> || <AMOUNT> || <DIRECTION> || <BALANCE> || <MONTH>
 
 Where:
 - <DESCRIPTION> is a concise text (e.g. "IMPS Transfer – Oma Ram", "PANERA BREAD", "DIRECT DEBIT SGIO").
@@ -35,17 +38,12 @@ Where:
 - <AMOUNT> is a positive number (no currency symbols).
 - <DIRECTION> is either "debit" or "credit".
 - <BALANCE> is the running balance after that transaction, or the word NULL if no balance is shown.
+- <MONTH> is the month number (1–12) of the transaction date.
 
 Ignore any headers, footers, summary lines, page numbers, “Money In/Money Out” totals, etc.
 Preserve the original order.
 
-For example:
-IMPS Transfer – Oma Ram || INR || 1.00 || credit || 22.62
-IMPS Transfer – Oma Ram || INR || 2000.00 || credit || 2022.62
-NACH ACH Bajaj Financial || INR || 1912.00 || debit || 110.62
-…
-
-Do not output anything else—no extra commentary. Here is the raw text:
+Here is the raw text:
 
 {raw_text}
 """
@@ -57,12 +55,12 @@ Do not output anything else—no extra commentary. Here is the raw text:
     transactions = []
     for line in lines:
         parts = [p.strip() for p in line.split("||")]
-        if len(parts) != 5:
+        if len(parts) != 6:
             # Skip any malformed line
             continue
-        desc, curr_str, amt_str, dir_str, bal_str = parts
+        desc, curr_str, amt_str, dir_str, bal_str, month_str = parts
 
-        currency = curr_str.upper()  # e.g. "INR", "USD", "GBP", "AUD"
+        currency = curr_str.upper()
         try:
             amount = float(amt_str.replace(",", ""))
         except:
@@ -75,12 +73,20 @@ Do not output anything else—no extra commentary. Here is the raw text:
         except:
             balance = None
 
+        try:
+            month = int(month_str)
+            if not (1 <= month <= 12):
+                month = None
+        except:
+            month = None
+
         transactions.append({
             "description": desc,
             "currency": currency,
             "amount": amount,
             "direction": direction,
-            "balance": balance
+            "balance": balance,
+            "month": month
         })
     return transactions
 
@@ -88,35 +94,37 @@ def normalize_currencies(raw_lines: str) -> List[Dict[str, Any]]:
     """
     STEP 2: CONVERT AMOUNT & BALANCE TO USD
     Input: a multiline string where each line is already in the format:
-      DESCRIPTION || CURRENCY || AMOUNT || DIRECTION || BALANCE
+      DESCRIPTION || CURRENCY || AMOUNT || DIRECTION || BALANCE || MONTH
 
     Output: a Python list of dicts, each with:
       • "description" (string, unchanged)
       • "amount"      (float, converted into USD)
       • "direction"   (string, unchanged)
       • "balance"     (float or None, converted into USD)
+      • "month"       (int, same as input)
 
     We ask Gemini to read each line and output exactly:
-      DESCRIPTION || AMOUNT_USD || DIRECTION || BALANCE_USD
+      DESCRIPTION || AMOUNT_USD || DIRECTION || BALANCE_USD || MONTH
     Then we parse it back into Python dicts.
     """
 
     prompt = f"""
 You are a currency‐conversion assistant. Each line below represents one bank transaction in this format:
 
-  DESCRIPTION || CURRENCY || AMOUNT || DIRECTION || BALANCE
+  DESCRIPTION || CURRENCY || AMOUNT || DIRECTION || BALANCE || MONTH
 
 • DESCRIPTION is a short text describing the transaction.
 • CURRENCY is a three‐letter code (e.g. INR, USD, GBP, AUD).
 • AMOUNT is a positive number in that currency.
 • DIRECTION is either "debit" or "credit".
 • BALANCE is the running balance after that transaction, or the word NULL if no balance was shown.
+• MONTH is the month number (1–12) of the transaction.
 
 For each line, convert AMOUNT and BALANCE into USD (using current exchange rates). Output each transaction on its own line, in exactly this format:
 
-  DESCRIPTION || AMOUNT_USD || DIRECTION || BALANCE_USD
+  DESCRIPTION || AMOUNT_USD || DIRECTION || BALANCE_USD || MONTH
 
-– DESCRIPTION and DIRECTION must remain unchanged.
+– DESCRIPTION, DIRECTION, and MONTH must remain unchanged.
 – AMOUNT_USD is the converted amount in USD (two decimals).
 – BALANCE_USD is the converted balance in USD (two decimals), or NULL if original BALANCE was NULL.
 
@@ -135,98 +143,225 @@ Here are the transactions to convert:
         if not line:
             continue
         parts = [p.strip() for p in line.split("||")]
-        # Expect exactly 4 parts: desc, amt_usd, direction, bal_usd
-        if len(parts) != 4:
+        # Expect exactly 5 parts: desc, amt_usd, direction, bal_usd, month
+        if len(parts) != 5:
             continue
 
-        desc, amt_usd_str, dir_str, bal_usd_str = parts
+        desc, amt_usd_str, dir_str, bal_usd_str, month_str = parts
+
         try:
             amount_usd = float(amt_usd_str.replace(",", ""))
         except:
             amount_usd = None
+
         direction = dir_str.lower() if dir_str.lower() in ("debit", "credit") else None
+
         try:
             balance_usd = float(bal_usd_str.replace(",", "")) if bal_usd_str.upper() != "NULL" else None
         except:
             balance_usd = None
 
+        try:
+            month = int(month_str)
+            if not (1 <= month <= 12):
+                month = None
+        except:
+            month = None
+
         output.append({
             "description": desc,
             "amount": amount_usd,
             "direction": direction,
-            "balance": balance_usd
+            "balance": balance_usd,
+            "month": month
         })
+
     return output
 
 
 def check_data_integrity(transactions: List[Dict[str, Optional[float]]]) -> List[Dict]:
     """
     STEP 3: SPOT INTEGRITY ISSUES (via Gemini).
-    Input: JSON array of transactions with numeric "amount" and "balance".
-    Output: JSON array of issues: { "reason": "...", "transaction": { … } }
+    Only two anomaly types:
+      • Invalid amount  → amount is null/missing or ≤ 0
+      • Invalid direction → direction (trimmed) is not exactly "debit" or "credit" (case-insensitive)
+
+    Transactions with a positive numeric amount AND a valid direction must never be flagged.
     """
     tx_json = json.dumps(transactions, default=str)
     prompt = f"""
-You are a data‐integrity auditor. Given this JSON array of bank transactions (fields: description, amount, direction, balance), 
-identify any anomalies. For each problematic transaction, return an object:
+You are a data-integrity auditor for normalized bank transactions. Only flag these two cases:
 
-  {{
-    "reason": STRING,
-    "transaction": original transaction
-  }}
+  • "Invalid amount": when the transaction's amount field is missing, null, or ≤ 0  
+  • "Invalid direction": when the direction field (after trimming whitespace) is not exactly "debit" or "credit" (case-insensitive)
 
-Possible reasons:
-- "Invalid amount" → amount ≤ 0 or missing.
-- "Invalid direction" → not exactly "debit" or "credit".
-- "Missing balance" → balance is null/null‐string but other rows have balances.
+Transactions with a positive numeric amount **and** a valid direction must **never** be flagged.
 
-If no issues, return an empty array: [].
+For each anomaly, output one line **only** in this format:
 
-Input:
+<REASON> || <TRANSACTION_JSON>
+
+Where <REASON> is exactly "Invalid amount" or "Invalid direction", and <TRANSACTION_JSON> is the full JSON object of that transaction.  
+Do **not** output anything else. If there are no anomalies, return an empty response.
+
+Here is the input JSON:
 {tx_json}
 """
     response = model.generate_content(prompt)
-    txt = response.text.strip()
-    try:
-        return json.loads(txt)
-    except json.JSONDecodeError:
-        return []
+    raw = (response.text or "").strip()
+    issues = []
+    for line in raw.splitlines():
+        parts = [p.strip() for p in line.split("||", 1)]
+        if len(parts) != 2:
+            continue
+        reason, tx_str = parts
+        if reason not in ("Invalid amount", "Invalid direction"):
+            continue
+        try:
+            tx_obj = json.loads(tx_str)
+        except json.JSONDecodeError:
+            continue
+        issues.append({"reason": reason, "transaction": tx_obj})
+    return issues
 
 
-def analyze_signals(transactions: List[Dict[str, Optional[float]]]) -> Dict[str, float]:
+
+def analyze_signals(transactions: List[Dict[str, Optional[float]]]) -> Dict[str, Any]:
     """
-    STEP 4: COMPUTE FINANCIAL SIGNALS (via Gemini), but with a flexible, line‐based output.
-    Input: a Python list of normalized transaction dicts.
-    Output: a dict with exactly these keys (all floats):
+    STEP 4: COMPUTE FINANCIAL SIGNALS (via Gemini), including per‐month flows and per‐month DTI.
+    Input: a Python list of normalized transaction dicts (each includes a numeric "month" field 1–12).
+    Output: a dict with exactly these keys, plus a monthly_flows sub‐dict for up to the last 3 months:
       {
-        "total_deposits": …,
-        "total_withdrawals": …,
-        "net_cash_flow": …,
-        "debt_to_income": …
+        "total_deposits": float,
+        "total_withdrawals": float,
+        "net_cash_flow": float,
+        "debt_to_income": float,
+        "monthly_flows": {
+          "MonthName": { … },
+          …
+        }
       }
-    If Gemini's output cannot be parsed, we fall back to zeros for all four.
     """
-    # Convert transactions into a JSON string so that Gemini can read them.
     tx_json = json.dumps(transactions, default=str)
 
     prompt = f"""
-You are a financial‐signals generator. Given this JSON array of normalized bank transactions 
-(fields: description, amount, direction, balance), compute exactly four signals:
+You are a financial-signals generator. Given this JSON array of normalized bank transactions 
+(fields: description, amount, direction, balance, month), compute:
 
-  total_deposits: sum of all “amount” where “direction” == “credit”
-  total_withdrawals: sum of all “amount” where “direction” == “debit”
-  net_cash_flow: total_deposits − total_withdrawals
-  debt_to_income: (sum of all “amount” where “description” mentions a loan, mortgage, credit‐card, or other debt payment) ÷ total_deposits
+1. total_deposits: sum of all amount where direction == "credit"  
+2. total_withdrawals: sum of all amount where direction == "debit"  
+3. net_cash_flow: total_deposits − total_withdrawals  
+4. overall debt_to_income: (sum of all debt-related payments across the entire period) ÷ total_deposits  
 
-**Output format (no extra commentary, exactly these four lines in any order):**
+Next, examine the transactions in their given order (oldest→newest) and collect **distinct months** by looking from the end backwards.  
+- If your data contains **only one** distinct month, generate flows for that single month.  
+- If it contains **two**, generate flows for those two months.  
+- If it contains **three or more**, generate flows for the **three most recent** distinct months.  
 
-total_deposits: <a floating‐point number>
-total_withdrawals: <a floating‐point number>
-net_cash_flow: <a floating‐point number>
-debt_to_income: <a floating‐point number between 0 and 1>
+For each selected month (in chronological oldest→newest order), compute:  
+  • deposits: sum of credits in that month  
+  • withdrawals: sum of debits in that month  
+  • end_balance: the balance after the last transaction in that month  
+  • debt_to_income: (sum of that month’s debt payments) ÷ (that month’s deposits)  
 
-Do not wrap your answer in JSON or code fences—just output the four lines as shown. Here is the input:
+Convert month numbers to English names (January, February, etc.).
 
+**Output exactly** (no JSON, no code fences) four top-level lines, then a `monthly_flows:` block **with exactly as many entries** (1, 2 or 3) as you selected:
+
+total_deposits: <float>  
+total_withdrawals: <float>  
+net_cash_flow: <float>  
+debt_to_income: <float between 0 and 1>
+
+monthly_flows:  
+  MonthA: {{ deposits: <float>, withdrawals: <float>, end_balance: <float>, debt_to_income: <float> }}  
+  MonthB: {{ deposits: <float>, withdrawals: <float>, end_balance: <float>, debt_to_income: <float> }}  
+  MonthC: {{ deposits: <float>, withdrawals: <float>, end_balance: <float>, debt_to_income: <float> }}
+
+Here is the input:
+{tx_json}
+"""
+
+    response = model.generate_content(prompt)
+    raw = (response.text or "").strip()
+
+    signals = {
+        "total_deposits": 0.0,
+        "total_withdrawals": 0.0,
+        "net_cash_flow": 0.0,
+        "debt_to_income": 0.0,
+        "monthly_flows": {}
+    }
+
+    for line in raw.splitlines():
+        line = line.strip()
+        # Top‐level signals
+        m = re.match(
+            r"^(total_deposits|total_withdrawals|net_cash_flow|debt_to_income):\s*([-+]?\d+(?:\.\d+)?)",
+            line, re.IGNORECASE
+        )
+        if m:
+            signals[m.group(1).lower()] = float(m.group(2))
+            continue
+
+        # Skip "monthly_flows:" header
+        if line.lower().startswith("monthly_flows"):
+            continue
+
+        # Monthly flows entries
+        m2 = re.match(
+            r"^([A-Za-z]+):\s*\{\s*deposits:\s*([-+]?\d+(?:\.\d+)?),\s*withdrawals:\s*([-+]?\d+(?:\.\d+)?),\s*end_balance:\s*([-+]?\d+(?:\.\d+)?),\s*debt_to_income:\s*([-+]?\d+(?:\.\d+)?)\s*\}$",
+            line
+        )
+        if m2:
+            month = m2.group(1)
+            signals["monthly_flows"][month] = {
+                "deposits":      float(m2.group(2)),
+                "withdrawals":   float(m2.group(3)),
+                "end_balance":   float(m2.group(4)),
+                "debt_to_income": float(m2.group(5)),
+            }
+
+    return signals
+
+
+def category_spending(normalized_transactions: List[Dict[str, Any]]) -> Dict[str, float]:
+    """
+    STEP 6: CATEGORIZE SPENDING INTO FOUR BUCKETS AS PERCENTAGES (via Gemini).
+    Input: a JSON array of normalized transactions (fields: description, amount, direction, balance).
+    Output: a dict with exactly these keys (all floats, summing to ~100):
+      {
+        "Living": …,   # percent of total debit spending
+        "Debt": …,     
+        "Leisure": …,
+        "Savings": …
+      }
+    """
+
+    # Serialize for Gemini
+    tx_json = json.dumps(normalized_transactions, default=str)
+
+    prompt = f"""
+You are a spending categorization assistant. Given this JSON array of normalized bank transactions
+(fields: description, amount, direction, balance), first calculate the total debit spending
+(sum of all “amount” where direction == "debit"). Then assign each debit transaction to one
+of four categories:
+  - Living: household bills, utilities, groceries, rent
+  - Debt: loan payments, mortgage, credit-card repayments
+  - Leisure: entertainment, dining out, travel, shopping
+  - Savings: transfers into savings or investment accounts
+
+Compute the percentage of the total debit spending represented by each category,
+rounded to two decimal places, so that the four categories sum to 100.
+
+Output exactly four lines, in this format (no % symbols, just numbers):
+
+Living: <float>
+Debt: <float>
+Leisure: <float>
+Savings: <float>
+
+Do not output any extra text or commentary—only these four lines. Here is the input JSON:
 {tx_json}
 """
 
@@ -234,32 +369,31 @@ Do not wrap your answer in JSON or code fences—just output the four lines as s
     response = model.generate_content(prompt)
     raw = (response.text or "").strip()
 
-    # Prepare a default dictionary
-    signals = {
-        "total_deposits": 0.0,
-        "total_withdrawals": 0.0,
-        "net_cash_flow": 0.0,
-        "debt_to_income": 0.0
+    # Prepare defaults
+    categories = {
+        "Living": 0.0,
+        "Debt": 0.0,
+        "Leisure": 0.0,
+        "Savings": 0.0,
     }
 
-    # Split the output into lines and look for our four keys
+    # Parse Gemini’s four-line output
     for line in raw.splitlines():
         line = line.strip()
-        # Match patterns like: total_deposits: 12345.67 or debt_to_income: 0.35
         match = re.match(
-            r"^(total_deposits|total_withdrawals|net_cash_flow|debt_to_income)\s*:\s*([-+]?\d+(?:\.\d+)?)",
-            line,
-            re.IGNORECASE
+            r"^(Living|Debt|Leisure|Savings)\s*:\s*([-+]?\d+(?:\.\d+)?)",
+            line, re.IGNORECASE
         )
         if match:
-            key = match.group(1).lower()
+            key = match.group(1).title()
             try:
                 value = float(match.group(2))
             except ValueError:
                 value = 0.0
-            signals[key] = value
+            categories[key] = value
 
-    return signals
+    return categories
+
 
 def score_loan_applicant(
     transactions: List[Dict[str, Optional[float]]],
@@ -337,46 +471,60 @@ Return exactly one integer (no commentary, no JSON, no code fences).
     except:
         return 50
 
-def summarize_statement(transactions: List[Dict[str, Optional[float]]]) -> str:
+def summarize_statement(
+    transactions: List[Dict[str, Optional[float]]],
+    analysis_summary: Dict[str, float],
+    loan_score: int
+) -> str:
     """
-    STEP 6: PRODUCE HIGH‐LEVEL SUMMARY PARAGRAPH (via Gemini).
-    Input: a Python list of normalized transaction dicts (fields: description, amount, direction, balance).
-    Output: a 4–5 sentence paragraph discussing:
-      • Why the applicant appears to be a good or bad client
-      • Which factors (income consistency, spending patterns, net cash flow, debt‐to‐income) support that view
-      • If they are a weaker applicant, what they could do to improve their loanworthiness
+    STEP 6: PRODUCE HIGH-LEVEL SUMMARY PARAGRAPH (via Gemini), with dynamic length
+            and actionable tips for weaker applicants.
+    Inputs:
+      - transactions: list of normalized tx dicts (description, amount, direction, balance, month)
+      - analysis_summary: { total_deposits, total_withdrawals, net_cash_flow, debt_to_income }
+      - loan_score: integer 0–100
+    Output:
+      - A single paragraph:
+         • Strong (score>66): 4–5 sentences
+         • Moderate (33–66): 5–6 sentences with 1–2 suggestions
+         • Weak (<33): 8–9 sentences (first diagnose, then 3–4 “To improve…” sentences)
     """
-    # Serialize transactions into JSON so Gemini can read them
     tx_json = json.dumps(transactions, default=str)
+    td = analysis_summary.get("total_deposits", 0.0)
+    tw = analysis_summary.get("total_withdrawals", 0.0)
+    cf = analysis_summary.get("net_cash_flow", 0.0)
+    dti = analysis_summary.get("debt_to_income", 0.0)
 
     prompt = f"""
-You are a bank‐statement analyst. Given this JSON array of normalized transactions (fields: description, amount, direction, balance), write a concise 4–5 sentence paragraph that would be shown on a loan‐application results page. In your paragraph:
+You are a bank‐statement analyst.  Below is the applicant’s profile:
 
-  1. State whether the applicant appears to be a strong or weak candidate for a loan.
-  2. Cite supporting facts from their transaction history (e.g., consistent deposits, high net cash flow, low debt, or excessive withdrawals).
-  3. If they appear to be a weaker candidate, suggest specific actions they could take to improve their loanworthiness (e.g., reduce discretionary spending, build a savings cushion, lower debt).
-  4. End with an overall recommendation or summary sentence.
+Loan score: {loan_score}  
+total_deposits: {td:.2f}  
+total_withdrawals: {tw:.2f}  
+net_cash_flow: {cf:.2f}  
+debt_to_income: {dti:.4f}
 
-Do NOT output JSON—just return a plain paragraph. Here is the input data:
+Classify the applicant as “strong,” “moderate,” or “weak”:
+- If loan_score > 66 → strong
+- If 33 ≤ loan_score ≤ 66 → moderate
+- If loan_score < 33 → weak
+
+Write **one paragraph** as follows:
+1. For **strong**: 4–5 sentences explaining why they’re strong (cite deposit consistency, positive cash flow, low DTI).  Stop after 5 sentences.
+2. For **moderate**: 5–6 sentences describing both strengths and mild concerns, plus one or two quick improvement suggestions.
+3. For **weak**: 8–9 sentences.  First 4–5 diagnose issues (low balances, irregular deposits, high DTI).  Then 3–4 sentences each beginning with verbs like “To improve, the applicant should …”, “They could consider …”, “It would help to …” that offer concrete, actionable advice.  
+
+Do **not** output JSON or bullet lists—just one flowing paragraph.  Here are the transactions:
 
 {tx_json}
 """
+
     response = model.generate_content(prompt)
-    summary_paragraph = (response.text or "").strip()
-
-    # If Gemini fails to produce a paragraph, fall back to a generic text
-    if not summary_paragraph:
-        # Compute some basic stats locally
-        deposits = [tx["amount"] for tx in transactions if tx.get("direction") == "credit" and tx.get("amount") is not None]
-        withdrawals = [tx["amount"] for tx in transactions if tx.get("direction") == "debit" and tx.get("amount") is not None]
-        num = len(transactions)
-        avg_dep = sum(deposits) / len(deposits) if deposits else 0.0
-        avg_wd = sum(withdrawals) / len(withdrawals) if withdrawals else 0.0
-        summary_paragraph = (
-            f"The applicant has {num} recent transactions, with an average deposit of ${avg_dep:.2f} "
-            f"and an average withdrawal of ${avg_wd:.2f}. Based on this limited data, it is unclear if they maintain "
-            f"consistent savings habits; they could improve by increasing regular deposits and reducing discretionary expenses. "
-            f"Overall, we recommend reviewing a larger sample of their history for a more definitive assessment."
+    summary = (response.text or "").strip()
+    if not summary:
+        summary = (
+            "Based on the available transactions, the applicant’s loanworthiness could not be determined. "
+            "Please check that the data is complete and try again."
         )
+    return summary
 
-    return summary_paragraph

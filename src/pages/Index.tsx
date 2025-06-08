@@ -59,10 +59,9 @@ const Index = () => {
         return;
       }
   
-      const result = await response.json();
-      console.log("Parsed result from backend:", result);
-  
-      navigate('/processing', { state: result });
+      const { session_id } = await response.json();
++     console.log("Received session_id:", session_id);
+      navigate('/processing', { state: { session_id, filename: selectedFile.name, loanAmount } });
     } catch (error) {
       console.error("Failed to analyze file:", error);
     }
@@ -78,9 +77,9 @@ const Index = () => {
         <div className="max-w-4xl mx-auto px-6 py-4">
           <div className="flex items-center space-x-3">
             <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-emerald-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-sm">SB</span>
+              <span className="text-white font-bold text-sm">FC</span>
             </div>
-            <h1 className="text-xl font-semibold text-slate-800">SmartBank Auditor</h1>
+            <h1 className="text-xl font-semibold text-slate-800">FlowCheck</h1>
           </div>
         </div>
       </div>
