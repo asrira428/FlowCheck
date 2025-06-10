@@ -21,6 +21,7 @@ interface GeminiResult {
     amount: number;
     direction: 'debit' | 'credit';
     balance: number;
+    month:number;
   }>;
   analysis_summary: {
     total_deposits: number;
@@ -442,6 +443,46 @@ const ResultsPage = () => {
             )}
           </CardContent>
         </Card>
+        {/* Normalized Transactions Table */}
+        <Card className="mb-8 bg-white border-slate-200">
+          <CardHeader>
+            <CardTitle>All Parsed Transactions</CardTitle>
+            <CardDescription>
+              The full list of transactions after currency conversion and normalization
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {finalResult.normalized_data.length > 0 ? (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Amount (USD)</TableHead>
+                      <TableHead>Direction</TableHead>
+                      <TableHead>Balance (USD)</TableHead>
+                      <TableHead>Month</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {finalResult.normalized_data.map((tx, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell className="whitespace-nowrap">{tx.description}</TableCell>
+                        <TableCell>${tx.amount?.toFixed(2) ?? '–'}</TableCell>
+                        <TableCell className="capitalize">{tx.direction}</TableCell>
+                        <TableCell>${tx.balance?.toFixed(2) ?? '–'}</TableCell>
+                        <TableCell>{tx.month ?? '–'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <p className="text-center text-slate-500">No normalized transactions available.</p>
+            )}
+          </CardContent>
+        </Card>
+
       </div>
     </div>
   );

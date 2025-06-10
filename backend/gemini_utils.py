@@ -439,6 +439,8 @@ total_withdrawals: {total_withdrawals:.2f}
 net_cash_flow: {net_cash_flow:.2f}
 debt_to_income: {debt_to_income:.4f}
 
+If Net Cash flow is significantly low, you cannot score this applicant more than 50, and if debt to income is above 20, you cannot score this applicant about 50.
+
 --- SECTION 2: Recent Transactions (CSV, up to 50 rows) ---
 Columns: description,amount,direction,balance
 {csv_blob}

@@ -36,7 +36,7 @@ const ProcessingPage = () => {
     },
     {
       title: 'Currency Mapping',
-      description: 'Recognizing symbols, formats, and normalization',
+      description: 'Converting Currency to USD',
       status: 'pending'
     },
     {
@@ -56,7 +56,7 @@ const ProcessingPage = () => {
     },
     {
       title: 'Report Ready',
-      description: 'Summary generated — ready for review',
+      description: 'Summary almost done!',
       status: 'pending'
     }
   ];
@@ -242,7 +242,7 @@ const ProcessingPage = () => {
             {currentStep > 0 && currentStep <= steps.length && (
               <div className="bg-slate-50 rounded-lg p-4 text-center">
                 <p className="text-slate-700">
-                  {processedSteps[currentStep - 1]?.description}
+                  {processedSteps[currentStep]?.description}
                 </p>
               </div>
             )}
