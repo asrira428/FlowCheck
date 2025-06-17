@@ -179,6 +179,7 @@ Here are the transactions to convert:
     return output
 
 
+
 def check_data_integrity(transactions: List[Dict[str, Optional[float]]]) -> List[Dict]:
     """
     STEP 3: SPOT INTEGRITY ISSUES (via Gemini).
